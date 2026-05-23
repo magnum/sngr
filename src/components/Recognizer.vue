@@ -5,8 +5,11 @@ import {
   MicrophoneIcon,
   MusicalNoteIcon,
 } from '@heroicons/vue/24/solid'
-import { XMarkIcon } from '@heroicons/vue/24/outline'
+import { ListBulletIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import ButtonNav from './ButtonNav.vue'
+import History from './History.vue'
 import SpotifyListenButton from './SpotifyListenButton.vue'
+import { useRecognitionHistory } from '../composables/useRecognitionHistory.js'
 
 const MAX_RECORDING_MS = 10_000
 const MAX_RECORDING_SEC = MAX_RECORDING_MS / 1000
@@ -37,6 +40,9 @@ const state = ref('ready')
 const recordingSeconds = ref(0)
 const recognizedSong = ref(null)
 const waveformCanvas = ref(null)
+const showHistory = ref(false)
+
+const { addEntry, items } = useRecognitionHistory()
 
 let mediaRecorder = null
 let mediaStream = null
@@ -244,7 +250,12 @@ function applyAudDResponse(data) {
       artist: data.result.artist ?? '',
       spotifyUrl: getSpotifyUrl(data.result.spotify),
     }
+    addEntry(recognizedSong.value)
+    return true
   }
+
+  recognizedSong.value = null
+  return false
 }
 
 async function fetchAudDResponse(blob, signal) {
@@ -364,81 +375,95 @@ onUnmounted(() => {
       aria-hidden="true"
     />
 
-    <div class="grid min-h-svh place-items-center px-4 font-sans">
-      <div class="relative size-[clamp(7rem,38vw,14rem)] shrink-0">
-        <button
-          type="button"
-          class="btn-embossed absolute inset-0 flex items-center justify-center rounded-full transition-transform duration-200 ease-in-out hover:scale-[1.15]"
-          :class="{
-            'btn-embossed-ready cursor-pointer': state === 'ready',
-            'btn-embossed-listening animate-recording-pulse cursor-pointer': state === 'listening',
-            'btn-embossed-recognizing animate-recording-pulse cursor-not-allowed': state === 'recognizing',
-          }"
-          @click="handleClick"
-        >
-          <SpeakerWaveIcon
-            v-if="state === 'ready'"
-            class="size-[clamp(2.75rem,15vw,5.5rem)] text-gray-700"
-          />
-          <MicrophoneIcon
-            v-else-if="state === 'listening'"
-            class="size-[clamp(2.75rem,15vw,5.5rem)] text-white"
-          />
-          <MusicalNoteIcon
-            v-else
-            class="size-[clamp(2.75rem,15vw,5.5rem)] text-white"
-          />
-        </button>
-
-        <div
-          class="absolute top-[calc(100%+clamp(1rem,3vw,1.75rem))] left-1/2 flex w-[min(90vw,28rem)] -translate-x-1/2 flex-col items-center gap-1 text-center"
-        >
-          <p class="text-base font-medium text-gray-600 sm:text-lg">
-            <template v-if="state === 'ready'">Click to RECORD</template>
-            <template v-else-if="state === 'listening'">LISTENING</template>
-            <template v-else>RECOGNIZING</template>
-          </p>
-
-          <p
-            v-if="state === 'listening'"
-            class="text-base text-gray-500 sm:text-lg"
+    <div class="grid min-h-svh w-full place-items-center px-4 font-sans">
+      <div class="grid w-full grid-cols-[1fr_auto_1fr] items-center gap-[clamp(0.75rem,3vw,1.5rem)]">
+        <div class="flex justify-end">
+          <ButtonNav
+            aria-label="Open history"
+            :disabled="state !== 'ready' || items.length === 0"
+            @click="showHistory = true"
           >
-            {{ recordingSeconds }} secs of {{ MAX_RECORDING_SEC }} max
-          </p>
+            <ListBulletIcon class="size-8 stroke-3" />
+          </ButtonNav>
+        </div>
 
+        <div class="relative size-[clamp(7rem,38vw,14rem)] shrink-0">
           <button
-            v-if="state === 'listening' || state === 'recognizing'"
             type="button"
-            class="mt-2 flex size-14 cursor-pointer items-center justify-center rounded-full bg-gray-200 text-gray-700 shadow-md transition-colors hover:bg-gray-300"
-            :aria-label="state === 'listening' ? 'Cancel recording' : 'Cancel recognition'"
-            @click="handleCancel"
+            class="btn-embossed absolute inset-0 flex items-center justify-center rounded-full transition-transform duration-200 ease-in-out hover:scale-[1.05]"
+            :class="{
+              'btn-embossed-ready cursor-pointer': state === 'ready',
+              'btn-embossed-listening animate-recording-pulse cursor-pointer': state === 'listening',
+              'btn-embossed-recognizing animate-recording-pulse cursor-not-allowed': state === 'recognizing',
+            }"
+            @click="handleClick"
           >
-            <XMarkIcon class="size-8 stroke-3" />
+            <SpeakerWaveIcon
+              v-if="state === 'ready'"
+              class="size-[clamp(2.75rem,15vw,5.5rem)] text-gray-700"
+            />
+            <MicrophoneIcon
+              v-else-if="state === 'listening'"
+              class="size-[clamp(2.75rem,15vw,5.5rem)] text-white"
+            />
+            <MusicalNoteIcon
+              v-else
+              class="size-[clamp(2.75rem,15vw,5.5rem)] text-white"
+            />
           </button>
 
           <div
-            v-if="state === 'ready' && recognizedSong"
-            class="mt-2 flex w-full flex-col items-center"
+            class="absolute top-[calc(100%+clamp(1rem,3vw,1.75rem))] left-1/2 flex w-[min(90vw,28rem)] -translate-x-1/2 flex-col items-center gap-1 text-center"
           >
-            <div class="flex flex-col items-center gap-0.5">
-              <p class="text-[clamp(1.5rem,5.25vw,1.875rem)] leading-tight font-bold text-gray-900">
-                {{ recognizedSong.title }}
-              </p>
-              <p
-                v-if="recognizedSong.artist"
-                class="text-[clamp(1.125rem,4.2vw,1.5rem)] leading-snug text-gray-600"
-              >
-                {{ recognizedSong.artist }}
-              </p>
+            <p class="text-base font-medium text-gray-600 sm:text-lg">
+              <template v-if="state === 'ready'">Click to RECORD</template>
+              <template v-else-if="state === 'listening'">LISTENING</template>
+              <template v-else>RECOGNIZING</template>
+            </p>
+
+            <p
+              v-if="state === 'listening'"
+              class="text-base text-gray-500 sm:text-lg"
+            >
+              {{ recordingSeconds }} secs of {{ MAX_RECORDING_SEC }} max
+            </p>
+
+            <div
+              v-if="state === 'ready' && recognizedSong"
+              class="mt-2 flex w-full flex-col items-center"
+            >
+              <div class="flex flex-col items-center gap-0.5">
+                <p class="text-[clamp(1.5rem,5.25vw,1.875rem)] leading-tight font-bold text-gray-900">
+                  {{ recognizedSong.title }}
+                </p>
+                <p
+                  v-if="recognizedSong.artist"
+                  class="text-[clamp(1.125rem,4.2vw,1.5rem)] leading-snug text-gray-600"
+                >
+                  {{ recognizedSong.artist }}
+                </p>
+              </div>
+              <SpotifyListenButton
+                v-if="recognizedSong.spotifyUrl"
+                :href="recognizedSong.spotifyUrl"
+                class="mt-5"
+              />
             </div>
-            <SpotifyListenButton
-              v-if="recognizedSong.spotifyUrl"
-              :href="recognizedSong.spotifyUrl"
-              class="mt-5"
-            />
           </div>
+        </div>
+
+        <div class="flex justify-start">
+          <ButtonNav
+            :aria-label="state === 'listening' ? 'Cancel recording' : 'Cancel recognition'"
+            :disabled="state !== 'listening' && state !== 'recognizing'"
+            @click="handleCancel"
+          >
+            <XMarkIcon class="size-8 stroke-3" />
+          </ButtonNav>
         </div>
       </div>
     </div>
+
+    <History v-if="showHistory" @close="showHistory = false" />
   </div>
 </template>

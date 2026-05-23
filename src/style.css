@@ -80,7 +80,7 @@
 
   .btn-embossed.animate-recording-pulse:hover {
     animation: none;
-    transform: scale(1.15);
+    transform: scale(1.05);
   }
 }
 
