@@ -1,6 +1,8 @@
 <script setup>
 import { shallowRef, onMounted, onUnmounted } from 'vue'
 import { Router } from './routing.js'
+import Footer from './components/Footer.vue'
+import Header from './components/Header.vue'
 import Recognizer from './components/Recognizer.vue'
 
 const router = new Router({
@@ -23,5 +25,7 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <Header />
   <component :is="currentComponent" />
+  <Footer />
 </template>

@@ -263,11 +263,11 @@ onUnmounted(() => {
     <div class="relative flex min-h-svh flex-col items-center justify-center gap-[clamp(1rem,3vw,1.75rem)] font-sans">
       <button
         type="button"
-        class="flex size-[clamp(7rem,38vw,14rem)] items-center justify-center rounded-full transition-colors"
+        class="btn-embossed flex size-[clamp(7rem,38vw,14rem)] items-center justify-center rounded-full"
         :class="{
-          'cursor-pointer bg-gray-200 hover:bg-gray-300': state === 'ready',
-          'animate-recording-pulse cursor-pointer bg-green-500 hover:bg-green-600': state === 'listening',
-          'cursor-not-allowed bg-gray-400': state === 'recognizing',
+          'btn-embossed-ready cursor-pointer': state === 'ready',
+          'btn-embossed-listening animate-recording-pulse cursor-pointer': state === 'listening',
+          'btn-embossed-recognizing cursor-not-allowed': state === 'recognizing',
         }"
         :disabled="state === 'recognizing'"
         @click="handleClick"
