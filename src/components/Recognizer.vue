@@ -3,11 +3,35 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import {
   SpeakerWaveIcon,
   MicrophoneIcon,
-  ArrowPathRoundedSquareIcon,
+  MusicalNoteIcon,
 } from '@heroicons/vue/24/solid'
+import { XMarkIcon } from '@heroicons/vue/24/outline'
+import SpotifyListenButton from './SpotifyListenButton.vue'
 
 const MAX_RECORDING_MS = 10_000
 const MAX_RECORDING_SEC = MAX_RECORDING_MS / 1000
+
+function getSpotifyUrl(spotify) {
+  if (!spotify) return null
+
+  if (spotify.external_urls?.spotify) {
+    return spotify.external_urls.spotify
+  }
+
+  if (spotify.url) {
+    return spotify.url
+  }
+
+  const uri = spotify.uri
+  if (typeof uri === 'string' && uri.startsWith('spotify:track:')) {
+    return `https://open.spotify.com/track/${uri.split(':').pop()}`
+  }
+
+  return null
+}
+
+const isTestMode = new URLSearchParams(window.location.search).has('test')
+const TEST_RESPONSE_URL = '/data/test-response1.json'
 
 const state = ref('ready')
 const recordingSeconds = ref(0)
@@ -22,6 +46,9 @@ let recordingInterval = null
 let audioContext = null
 let analyser = null
 let animationFrameId = null
+let recognitionAbortController = null
+let recognitionCancelled = false
+let discardRecording = false
 
 function clearRecordingTimeout() {
   if (recordingTimeout) {
@@ -87,8 +114,10 @@ function drawWaveform() {
     else ctx.lineTo(x, y)
     x += sliceWidth
   }
-  ctx.strokeStyle = 'rgba(34, 197, 94, 0.35)'
-  ctx.lineWidth = 2
+  ctx.strokeStyle = 'rgba(34, 197, 94, 0.55)'
+  ctx.lineWidth = 4
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
   ctx.stroke()
 
   animationFrameId = requestAnimationFrame(drawWaveform)
@@ -145,8 +174,17 @@ async function startRecording() {
   }
 
   mediaRecorder.onstop = () => {
-    const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' })
     cleanupStream()
+
+    if (discardRecording) {
+      discardRecording = false
+      state.value = 'ready'
+      mediaRecorder = null
+      chunks = []
+      return
+    }
+
+    const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' })
     recognizeAudio(blob)
   }
 
@@ -179,34 +217,99 @@ function stopRecording() {
   }
 }
 
+async function fetchTestResponse(signal) {
+  await new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(resolve, 1500)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timeoutId)
+        reject(new DOMException('Aborted', 'AbortError'))
+      },
+      { once: true },
+    )
+  })
+
+  const response = await fetch(TEST_RESPONSE_URL, { signal })
+  if (!response.ok) {
+    throw new Error(`Failed to load test response (${response.status})`)
+  }
+  return response.json()
+}
+
+function applyAudDResponse(data) {
+  if (data.status === 'success' && data.result?.title) {
+    recognizedSong.value = {
+      title: data.result.title,
+      artist: data.result.artist ?? '',
+      spotifyUrl: getSpotifyUrl(data.result.spotify),
+    }
+  }
+}
+
+async function fetchAudDResponse(blob, signal) {
+  const formData = new FormData()
+  formData.append('file', blob, 'recording.webm')
+  formData.append('api_token', import.meta.env.VITE_AUDD_API_TOKEN ?? '')
+  formData.append('return', 'spotify')
+
+  const response = await fetch('https://api.audd.io/', {
+    method: 'POST',
+    body: formData,
+    signal,
+  })
+
+  return response.json()
+}
+
+function cancelRecognition() {
+  if (state.value !== 'recognizing') return
+
+  recognitionCancelled = true
+  recognitionAbortController?.abort()
+  state.value = 'ready'
+  mediaRecorder = null
+  chunks = []
+  recognitionAbortController = null
+}
+
+function cancelListening() {
+  if (state.value !== 'listening') return
+
+  discardRecording = true
+  stopRecording()
+}
+
+function handleCancel() {
+  if (state.value === 'listening') {
+    cancelListening()
+  } else if (state.value === 'recognizing') {
+    cancelRecognition()
+  }
+}
+
 async function recognizeAudio(blob) {
   state.value = 'recognizing'
+  recognitionCancelled = false
+  recognitionAbortController = new AbortController()
+  const { signal } = recognitionAbortController
 
   try {
-    const formData = new FormData()
-    formData.append('file', blob, 'recording.webm')
-    formData.append('api_token', import.meta.env.VITE_AUDD_API_TOKEN ?? '')
+    const data = isTestMode ? await fetchTestResponse(signal) : await fetchAudDResponse(blob, signal)
+    if (recognitionCancelled) return
 
-    const response = await fetch('https://api.audd.io/', {
-      method: 'POST',
-      body: formData,
-    })
-
-    const data = await response.json()
-    console.log('AudD recognition result:', data)
-
-    if (data.status === 'success' && data.result?.title) {
-      recognizedSong.value = {
-        title: data.result.title,
-        artist: data.result.artist ?? '',
-      }
-    }
+    console.log(isTestMode ? 'AudD mock result:' : 'AudD recognition result:', data)
+    applyAudDResponse(data)
   } catch (error) {
+    if (error.name === 'AbortError' || recognitionCancelled) return
     console.error('AudD recognition error:', error)
   } finally {
-    state.value = 'ready'
+    if (!recognitionCancelled) {
+      state.value = 'ready'
+    }
     mediaRecorder = null
     chunks = []
+    recognitionAbortController = null
   }
 }
 
@@ -242,6 +345,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  recognitionAbortController?.abort()
   clearRecordingTimeout()
   clearRecordingInterval()
   stopWaveform()
@@ -260,59 +364,80 @@ onUnmounted(() => {
       aria-hidden="true"
     />
 
-    <div class="relative flex min-h-svh flex-col items-center justify-center gap-[clamp(1rem,3vw,1.75rem)] font-sans">
-      <button
-        type="button"
-        class="btn-embossed flex size-[clamp(7rem,38vw,14rem)] items-center justify-center rounded-full"
-        :class="{
-          'btn-embossed-ready cursor-pointer': state === 'ready',
-          'btn-embossed-listening animate-recording-pulse cursor-pointer': state === 'listening',
-          'btn-embossed-recognizing cursor-not-allowed': state === 'recognizing',
-        }"
-        :disabled="state === 'recognizing'"
-        @click="handleClick"
-      >
-        <SpeakerWaveIcon
-          v-if="state === 'ready'"
-          class="size-[clamp(2.75rem,15vw,5.5rem)] text-gray-700"
-        />
-        <MicrophoneIcon
-          v-else-if="state === 'listening'"
-          class="size-[clamp(2.75rem,15vw,5.5rem)] text-white"
-        />
-        <ArrowPathRoundedSquareIcon
-          v-else
-          class="size-[clamp(2.75rem,15vw,5.5rem)] animate-spin text-white"
-        />
-      </button>
-
-      <div class="flex flex-col items-center gap-1">
-        <p class="text-base font-medium text-gray-600 sm:text-lg">
-          <template v-if="state === 'ready'">Click to RECORD</template>
-          <template v-else-if="state === 'listening'">LISTENING</template>
-          <template v-else>RECOGNIZING</template>
-        </p>
-
-        <p
-          v-if="state === 'listening'"
-          class="text-base text-gray-500 sm:text-lg"
+    <div class="grid min-h-svh place-items-center px-4 font-sans">
+      <div class="relative size-[clamp(7rem,38vw,14rem)] shrink-0">
+        <button
+          type="button"
+          class="btn-embossed absolute inset-0 flex items-center justify-center rounded-full"
+          :class="{
+            'btn-embossed-ready cursor-pointer': state === 'ready',
+            'btn-embossed-listening animate-recording-pulse cursor-pointer': state === 'listening',
+            'btn-embossed-recognizing animate-recording-pulse cursor-not-allowed': state === 'recognizing',
+          }"
+          :disabled="state === 'recognizing'"
+          @click="handleClick"
         >
-          {{ recordingSeconds }} secs of {{ MAX_RECORDING_SEC }} max
-        </p>
+          <SpeakerWaveIcon
+            v-if="state === 'ready'"
+            class="size-[clamp(2.75rem,15vw,5.5rem)] text-gray-700"
+          />
+          <MicrophoneIcon
+            v-else-if="state === 'listening'"
+            class="size-[clamp(2.75rem,15vw,5.5rem)] text-white"
+          />
+          <MusicalNoteIcon
+            v-else
+            class="size-[clamp(2.75rem,15vw,5.5rem)] text-white"
+          />
+        </button>
 
         <div
-          v-if="state === 'ready' && recognizedSong"
-          class="mt-2 flex max-w-[min(90vw,28rem)] flex-col items-center gap-1 text-center"
+          class="absolute top-[calc(100%+clamp(1rem,3vw,1.75rem))] left-1/2 flex w-[min(90vw,28rem)] -translate-x-1/2 flex-col items-center gap-1 text-center"
         >
-          <p class="text-[clamp(1.5rem,5.25vw,1.875rem)] leading-tight font-bold text-gray-900">
-            {{ recognizedSong.title }}
+          <p class="text-base font-medium text-gray-600 sm:text-lg">
+            <template v-if="state === 'ready'">Click to RECORD</template>
+            <template v-else-if="state === 'listening'">LISTENING</template>
+            <template v-else>RECOGNIZING</template>
           </p>
+
           <p
-            v-if="recognizedSong.artist"
-            class="text-[clamp(1.125rem,4.2vw,1.5rem)] leading-snug text-gray-600"
+            v-if="state === 'listening'"
+            class="text-base text-gray-500 sm:text-lg"
           >
-            {{ recognizedSong.artist }}
+            {{ recordingSeconds }} secs of {{ MAX_RECORDING_SEC }} max
           </p>
+
+          <button
+            v-if="state === 'listening' || state === 'recognizing'"
+            type="button"
+            class="mt-2 flex size-14 cursor-pointer items-center justify-center rounded-full bg-gray-200 text-gray-700 shadow-md transition-colors hover:bg-gray-300"
+            :aria-label="state === 'listening' ? 'Cancel recording' : 'Cancel recognition'"
+            @click="handleCancel"
+          >
+            <XMarkIcon class="size-8 stroke-3" />
+          </button>
+
+          <div
+            v-if="state === 'ready' && recognizedSong"
+            class="mt-2 flex w-full flex-col items-center"
+          >
+            <div class="flex flex-col items-center gap-0.5">
+              <p class="text-[clamp(1.5rem,5.25vw,1.875rem)] leading-tight font-bold text-gray-900">
+                {{ recognizedSong.title }}
+              </p>
+              <p
+                v-if="recognizedSong.artist"
+                class="text-[clamp(1.125rem,4.2vw,1.5rem)] leading-snug text-gray-600"
+              >
+                {{ recognizedSong.artist }}
+              </p>
+            </div>
+            <SpotifyListenButton
+              v-if="recognizedSong.spotifyUrl"
+              :href="recognizedSong.spotifyUrl"
+              class="mt-5"
+            />
+          </div>
         </div>
       </div>
     </div>
