@@ -88,3 +88,9 @@ body {
   margin: 0;
   font-family: var(--font-sans);
 }
+
+@media screen and (orientation: landscape) and (max-height: 31rem) {
+  .orientation-lock-overlay {
+    display: flex;
+  }
+}

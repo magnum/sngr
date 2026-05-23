@@ -25,6 +25,13 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <div
+    class="orientation-lock-overlay fixed inset-0 z-50 hidden items-center justify-center bg-white px-6 text-center font-sans text-lg font-medium text-gray-700"
+    aria-live="polite"
+  >
+    Rotate your device to portrait to use sngr.
+  </div>
+
   <Header />
   <component :is="currentComponent" />
   <Footer />
