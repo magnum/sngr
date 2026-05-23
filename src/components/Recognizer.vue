@@ -368,13 +368,12 @@ onUnmounted(() => {
       <div class="relative size-[clamp(7rem,38vw,14rem)] shrink-0">
         <button
           type="button"
-          class="btn-embossed absolute inset-0 flex items-center justify-center rounded-full"
+          class="btn-embossed absolute inset-0 flex items-center justify-center rounded-full transition-transform duration-200 ease-in-out hover:scale-[1.15]"
           :class="{
             'btn-embossed-ready cursor-pointer': state === 'ready',
             'btn-embossed-listening animate-recording-pulse cursor-pointer': state === 'listening',
             'btn-embossed-recognizing animate-recording-pulse cursor-not-allowed': state === 'recognizing',
           }"
-          :disabled="state === 'recognizing'"
           @click="handleClick"
         >
           <SpeakerWaveIcon
