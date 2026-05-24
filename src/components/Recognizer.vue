@@ -34,7 +34,9 @@ function getSpotifyUrl(spotify) {
 }
 
 const isTestMode = new URLSearchParams(window.location.search).has('test')
-const TEST_RESPONSE_URL = '/data/test-response1.json'
+const RECOGNIZE_URL = isTestMode
+  ? '/.netlify/functions/recognize?test'
+  : '/.netlify/functions/recognize'
 
 const state = ref('ready')
 const recordingSeconds = ref(0)
@@ -223,23 +225,20 @@ function stopRecording() {
   }
 }
 
-async function fetchTestResponse(signal) {
-  await new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(resolve, 1500)
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timeoutId)
-        reject(new DOMException('Aborted', 'AbortError'))
-      },
-      { once: true },
-    )
+async function fetchRecognize(blob, signal) {
+  const formData = new FormData()
+  formData.append('file', blob, 'recording.webm')
+
+  const response = await fetch(RECOGNIZE_URL, {
+    method: 'POST',
+    body: formData,
+    signal,
   })
 
-  const response = await fetch(TEST_RESPONSE_URL, { signal })
   if (!response.ok) {
-    throw new Error(`Failed to load test response (${response.status})`)
+    throw new Error(`Recognition failed (${response.status})`)
   }
+
   return response.json()
 }
 
@@ -256,21 +255,6 @@ function applyAudDResponse(data) {
 
   recognizedSong.value = null
   return false
-}
-
-async function fetchAudDResponse(blob, signal) {
-  const formData = new FormData()
-  formData.append('file', blob, 'recording.webm')
-  formData.append('api_token', import.meta.env.VITE_AUDD_API_TOKEN ?? '')
-  formData.append('return', 'spotify')
-
-  const response = await fetch('https://api.audd.io/', {
-    method: 'POST',
-    body: formData,
-    signal,
-  })
-
-  return response.json()
 }
 
 function cancelRecognition() {
@@ -306,7 +290,7 @@ async function recognizeAudio(blob) {
   const { signal } = recognitionAbortController
 
   try {
-    const data = isTestMode ? await fetchTestResponse(signal) : await fetchAudDResponse(blob, signal)
+    const data = await fetchRecognize(blob, signal)
     if (recognitionCancelled) return
 
     console.log(isTestMode ? 'AudD mock result:' : 'AudD recognition result:', data)
