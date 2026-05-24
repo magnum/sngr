@@ -19,12 +19,22 @@ export class Router {
     this.#resolve()
   }
 
+  replace(path) {
+    history.replaceState(null, '', path)
+    this.#resolve()
+  }
+
   start() {
-    if (window.location.pathname !== '/' && !this.#routes[window.location.pathname]) {
-      this.navigate('/')
+    const path = window.location.pathname
+    if (!this.#routes[path]) {
+      this.replace('/login')
       return
     }
     this.#resolve()
+  }
+
+  getPath() {
+    return window.location.pathname
   }
 
   #resolve() {

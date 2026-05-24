@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
 import {
   collection,
   doc,
@@ -8,11 +9,53 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { getRedirectResult } from 'firebase/auth'
+import { auth, db, ensureUserAccount, getAccountByUid } from './firebase.js'
 
 export const GLOBAL_KEY = Symbol('global')
 export const SESSION_STORAGE_KEY = 'sngr-sesssion-id'
 export const SESSION_LINKED_KEY = 'sngr-session-linked'
+export const REDIRECT_TO_KEY = 'redirect_to'
+
+/** Salva `/?session_id=…` se l'utente apre il QR senza essere loggato. */
+export function captureSessionRedirectIfNeeded() {
+  if (typeof window === 'undefined') return
+
+  const params = new URLSearchParams(window.location.search)
+  if (!params.get('session_id')?.trim()) return
+
+  const redirectTo = `${window.location.pathname}${window.location.search}`
+  try {
+    localStorage.setItem(REDIRECT_TO_KEY, redirectTo)
+  } catch (err) {
+    console.warn('[sngr] captureSessionRedirectIfNeeded', err)
+  }
+}
+
+/** Legge e rimuove l'URL post-login (path + query, es. `/?session_id=abc`). */
+export function consumeRedirectTo() {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const value = localStorage.getItem(REDIRECT_TO_KEY)
+    if (value == null || String(value).trim() === '') return null
+    localStorage.removeItem(REDIRECT_TO_KEY)
+    return String(value).trim()
+  } catch (err) {
+    console.warn('[sngr] consumeRedirectTo', err)
+    return null
+  }
+}
+
+export function createDefaultAccount() {
+  return {
+    uid: null,
+    firstname: '',
+    lastname: '',
+    email: '',
+    roles: [],
+  }
+}
 
 export function createDefaultSession(id = null) {
   return {
@@ -28,10 +71,74 @@ export function createDefaultSession(id = null) {
 
 export class Global {
   session = reactive(createDefaultSession())
+  account = reactive(createDefaultAccount())
+  authUser = reactive({ uid: null, photoURL: null })
 
   _unsubscribe = null
+  _unsubscribeAuth = null
   _syncingFromRemote = false
+  authReady = false
   ready = false
+
+  async initAuth(onChange) {
+    try {
+      try {
+        await getRedirectResult(auth)
+      } catch (err) {
+        if (err?.code !== 'auth/no-auth-event') {
+          console.error('[sngr] Google redirect sign-in error:', err)
+        }
+      }
+
+      await auth.authStateReady()
+
+      const syncUser = async (user) => {
+        if (user) {
+          this.authUser.uid = user.uid
+          this.authUser.photoURL = user.photoURL ?? null
+
+          try {
+            await ensureUserAccount(user)
+            const account = await getAccountByUid(user.uid)
+            if (account) {
+              Object.assign(this.account, createDefaultAccount(), account, { uid: user.uid })
+            }
+          } catch (err) {
+            console.error('[sngr] account sync failed:', err)
+          }
+
+          onChange?.(true)
+          return
+        }
+
+        this.resetAccount()
+        this.authUser.uid = null
+        this.authUser.photoURL = null
+        this.ready = false
+        onChange?.(false)
+      }
+
+      this._unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+        void syncUser(user)
+      })
+
+      await syncUser(auth.currentUser)
+    } finally {
+      this.authReady = true
+    }
+  }
+
+  isAuthenticated() {
+    return !!(auth.currentUser?.uid || this.authUser.uid)
+  }
+
+  resetAccount() {
+    Object.assign(this.account, createDefaultAccount())
+  }
+
+  async logout() {
+    await signOut(auth)
+  }
 
   async checkSession() {
     const urlParams = new URLSearchParams(window.location.search)
@@ -156,5 +263,7 @@ export class Global {
   destroy() {
     this._unsubscribe?.()
     this._unsubscribe = null
+    this._unsubscribeAuth?.()
+    this._unsubscribeAuth = null
   }
 }
