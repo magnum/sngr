@@ -1,15 +1,19 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import {
   SpeakerWaveIcon,
   MicrophoneIcon,
   MusicalNoteIcon,
 } from '@heroicons/vue/24/solid'
-import { ListBulletIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import { ListBulletIcon, QrCodeIcon, XMarkIcon } from '@heroicons/vue/24/outline'
 import ButtonNav from './ButtonNav.vue'
 import History from './History.vue'
+import SessionQrCode from './SessionQrCode.vue'
 import SpotifyListenButton from './SpotifyListenButton.vue'
+import { useGlobal } from '../composables/useGlobal.js'
 import { useRecognitionHistory } from '../composables/useRecognitionHistory.js'
+
+const global = useGlobal()
 
 const MAX_RECORDING_MS = 10_000
 const MAX_RECORDING_SEC = MAX_RECORDING_MS / 1000
@@ -38,9 +42,19 @@ const RECOGNIZE_URL = isTestMode
   ? '/.netlify/functions/recognize?test'
   : '/.netlify/functions/recognize'
 
-const state = ref('ready')
+const state = computed(() => global.session.state)
+const isLinked = computed(() => global.isLinked())
+const recognizedSong = computed(() => {
+  if (!global.session.title) return null
+
+  return {
+    title: global.session.title,
+    artist: global.session.author,
+    spotifyUrl: global.session.url || null,
+  }
+})
+
 const recordingSeconds = ref(0)
-const recognizedSong = ref(null)
 const waveformCanvas = ref(null)
 const showHistory = ref(false)
 
@@ -57,6 +71,7 @@ let animationFrameId = null
 let recognitionAbortController = null
 let recognitionCancelled = false
 let discardRecording = false
+const localActive = ref(false)
 
 function clearRecordingTimeout() {
   if (recordingTimeout) {
@@ -171,7 +186,15 @@ function startRecordingTimer() {
 
 async function startRecording() {
   chunks = []
-  recognizedSong.value = null
+  localActive.value = true
+  await global.updateSession({
+    state: 'listening',
+    title: '',
+    author: '',
+    url: '',
+    response: null,
+  })
+
   mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
   mediaRecorder = new MediaRecorder(mediaStream)
 
@@ -181,12 +204,13 @@ async function startRecording() {
     }
   }
 
-  mediaRecorder.onstop = () => {
+  mediaRecorder.onstop = async () => {
     cleanupStream()
 
     if (discardRecording) {
       discardRecording = false
-      state.value = 'ready'
+      localActive.value = false
+      await global.updateSession({ state: 'ready' })
       mediaRecorder = null
       chunks = []
       return
@@ -197,7 +221,6 @@ async function startRecording() {
   }
 
   mediaRecorder.start()
-  state.value = 'listening'
   startRecordingTimer()
   startWaveform(mediaStream)
 
@@ -242,34 +265,49 @@ async function fetchRecognize(blob, signal) {
   return response.json()
 }
 
-function applyAudDResponse(data) {
+async function applyAudDResponse(data) {
   if (data.status === 'success' && data.result?.title) {
-    recognizedSong.value = {
+    const song = {
       title: data.result.title,
       artist: data.result.artist ?? '',
       spotifyUrl: getSpotifyUrl(data.result.spotify),
     }
-    addEntry(recognizedSong.value)
+
+    await global.updateSession({
+      state: 'ready',
+      title: song.title,
+      author: song.artist,
+      url: song.spotifyUrl ?? '',
+      response: data,
+    })
+    addEntry(song)
     return true
   }
 
-  recognizedSong.value = null
+  await global.updateSession({
+    state: 'ready',
+    title: '',
+    author: '',
+    url: '',
+    response: data,
+  })
   return false
 }
 
-function cancelRecognition() {
-  if (state.value !== 'recognizing') return
+async function cancelRecognition() {
+  if (state.value !== 'recognizing' || !localActive.value) return
 
   recognitionCancelled = true
   recognitionAbortController?.abort()
-  state.value = 'ready'
+  localActive.value = false
+  await global.updateSession({ state: 'ready' })
   mediaRecorder = null
   chunks = []
   recognitionAbortController = null
 }
 
-function cancelListening() {
-  if (state.value !== 'listening') return
+async function cancelListening() {
+  if (state.value !== 'listening' || !localActive.value) return
 
   discardRecording = true
   stopRecording()
@@ -284,7 +322,7 @@ function handleCancel() {
 }
 
 async function recognizeAudio(blob) {
-  state.value = 'recognizing'
+  await global.updateSession({ state: 'recognizing' })
   recognitionCancelled = false
   recognitionAbortController = new AbortController()
   const { signal } = recognitionAbortController
@@ -294,14 +332,13 @@ async function recognizeAudio(blob) {
     if (recognitionCancelled) return
 
     console.log(isTestMode ? 'AudD mock result:' : 'AudD recognition result:', data)
-    applyAudDResponse(data)
+    await applyAudDResponse(data)
   } catch (error) {
     if (error.name === 'AbortError' || recognitionCancelled) return
     console.error('AudD recognition error:', error)
+    await global.updateSession({ state: 'ready' })
   } finally {
-    if (!recognitionCancelled) {
-      state.value = 'ready'
-    }
+    localActive.value = false
     mediaRecorder = null
     chunks = []
     recognitionAbortController = null
@@ -310,6 +347,7 @@ async function recognizeAudio(blob) {
 
 async function handleClick() {
   if (state.value === 'recognizing') return
+  if (state.value === 'listening' && !localActive.value) return
 
   if (state.value === 'ready') {
     try {
@@ -318,12 +356,13 @@ async function handleClick() {
       console.error('Microphone access error:', error)
       clearRecordingInterval()
       stopWaveform()
-      state.value = 'ready'
+      localActive.value = false
+      await global.updateSession({ state: 'ready' })
     }
     return
   }
 
-  if (state.value === 'listening') {
+  if (state.value === 'listening' && localActive.value) {
     stopRecording()
   }
 }
@@ -332,6 +371,11 @@ function handleResize() {
   if (waveformCanvas.value) {
     resizeCanvas(waveformCanvas.value)
   }
+}
+
+async function handleQrClick() {
+  if (state.value !== 'ready' || global.session.linking || global.isLinked()) return
+  await global.startLinking()
 }
 
 onMounted(() => {
@@ -359,8 +403,9 @@ onUnmounted(() => {
       aria-hidden="true"
     />
 
-    <div class="grid min-h-svh w-full place-items-center px-4 font-sans">
-      <div class="grid w-full grid-cols-[1fr_auto_1fr] items-center gap-[clamp(0.75rem,3vw,1.5rem)]">
+    <div class="relative min-h-svh w-full px-4 font-sans">
+      <div class="absolute inset-x-0 top-[40svh] -translate-y-1/2 px-4">
+        <div class="grid w-full grid-cols-[1fr_auto_1fr] items-center gap-[clamp(0.75rem,3vw,1.5rem)]">
         <div class="flex justify-end">
           <ButtonNav
             aria-label="Open history"
@@ -371,7 +416,18 @@ onUnmounted(() => {
           </ButtonNav>
         </div>
 
-        <div class="relative size-[clamp(7rem,38vw,14rem)] shrink-0">
+        <div class="relative flex flex-col items-center">
+          <ButtonNav
+            v-if="!isLinked"
+            aria-label="Link another device"
+            class="absolute bottom-[calc(100%+clamp(0.75rem,3vw,1.25rem))] left-1/2 -translate-x-1/2"
+            :disabled="state !== 'ready' || global.session.linking"
+            @click="handleQrClick"
+          >
+            <QrCodeIcon class="size-8" />
+          </ButtonNav>
+
+          <div class="relative size-[clamp(7rem,38vw,14rem)] shrink-0">
           <button
             type="button"
             class="btn-embossed absolute inset-0 flex items-center justify-center rounded-full transition-transform duration-200 ease-in-out hover:scale-[1.05]"
@@ -434,20 +490,23 @@ onUnmounted(() => {
               />
             </div>
           </div>
+          </div>
         </div>
 
         <div class="flex justify-start">
           <ButtonNav
             :aria-label="state === 'listening' ? 'Cancel recording' : 'Cancel recognition'"
-            :disabled="state !== 'listening' && state !== 'recognizing'"
+            :disabled="!localActive.value || (state !== 'listening' && state !== 'recognizing')"
             @click="handleCancel"
           >
             <XMarkIcon class="size-8 stroke-3" />
           </ButtonNav>
         </div>
       </div>
+      </div>
     </div>
 
+    <SessionQrCode />
     <History v-if="showHistory" @close="showHistory = false" />
   </div>
 </template>

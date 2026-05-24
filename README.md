@@ -41,6 +41,16 @@ Open the app at `http://localhost:8888`. Grant microphone access when prompted.
 
 Set `AUDD_API_TOKEN` in `.env` (used by the Netlify function) and in the Netlify dashboard for production. Get a token from [AudD](https://dashboard.audd.io/).
 
+Set `VITE_BASE_URL` to the public app URL (e.g. `https://sngr.m6i.it`) for session QR codes.
+
+### Firebase sessions
+
+Multi-device handoff uses Firestore collection `sessions` with realtime sync. Enable Firestore in the Firebase console and deploy rules:
+
+```bash
+npx firebase-tools deploy --only firestore:rules
+```
+
 For frontend-only work without the recognition function, use `npm run dev` — recognition requests require `npm run dev:netlify`.
 
 ### Test mode
