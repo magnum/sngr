@@ -132,6 +132,11 @@ export class Global {
     return !!(auth.currentUser?.uid || this.authUser.uid)
   }
 
+  hasTestAccess() {
+    const roles = this.account.roles
+    return Array.isArray(roles) && roles.includes('test')
+  }
+
   resetAccount() {
     Object.assign(this.account, createDefaultAccount())
   }

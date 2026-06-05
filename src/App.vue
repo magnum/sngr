@@ -6,6 +6,7 @@ import Header from './components/Header.vue'
 import UserInfo from './components/UserInfo.vue'
 import Recognizer from './components/Recognizer.vue'
 import LoginView from './views/LoginView.vue'
+import NoAccessView from './views/NoAccessView.vue'
 import {
   Global,
   GLOBAL_KEY,
@@ -16,6 +17,7 @@ import {
 const router = new Router({
   '/': Recognizer,
   '/login': LoginView,
+  '/noAccess': NoAccessView,
 })
 
 const global = new Global()
@@ -54,11 +56,20 @@ function applyRoute(component, path) {
     return
   }
 
-  showShell.value = true
-
   if (applyPostLoginRedirect()) return
 
-  if (path === '/login') {
+  if (!global.hasTestAccess()) {
+    showShell.value = false
+    currentComponent.value = NoAccessView
+    if (path !== '/noAccess') {
+      router.replace('/noAccess')
+    }
+    return
+  }
+
+  showShell.value = true
+
+  if (path === '/login' || path === '/noAccess') {
     router.replace('/')
     return
   }
